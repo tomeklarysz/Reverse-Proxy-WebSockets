@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import json
 
 from websockets.asyncio.server import serve
@@ -15,26 +16,46 @@ async def tunnel_handler(ws):
     print("Tunnel disconnected")
 
 async def http_handler(reader, writer):
-    method, path, _ = (await reader.readline()).decode().split(" ", 2)
-    while (await reader.readline()).strip():
-        pass
+    try:
+        line = await reader.readline()
+        if not line:
+            writer.close()
+            return
+        parts = line.decode().split(" ", 2)
+        if len(parts) < 2:
+            writer.close()
+            return
+        method, path = parts[0], parts[1]
+        while (await reader.readline()).strip():
+            pass
+    except Exception:
+        writer.close()
+        return
+
     print(f"HTTP {method} {path}")
 
+    content_type = "text/html; charset=utf-8"
     if tunnel is None:
-        status, body = 502, "<h1>502</h1><p>Home server is offline.</p>"
+        status, data = 502, b"<h1>502 Bad Gateway</h1><p>Home server is offline.</p>"
     else:
         async with lock:
             try:
                 await tunnel.send(json.dumps({"method": method, "path": path}))
                 response = await asyncio.wait_for(tunnel.recv(), timeout=10)
-                status, body = 200, json.loads(response)["body"]
-            except Exception:
-                status, body = 504, "<h1>504</h1><p>No response from home server.</p>"
+                res = json.loads(response)
+                status = res.get("status_code", 200)
+                content_type = res.get("headers", {}).get("Content-Type", "text/html; charset=utf-8")
 
-    data = body.encode()
+                if res.get("is_base64"):
+                    data = base64.b64decode(res["body"])
+                else:
+                    data = res["body"].encode("utf-8")
+            except Exception as e:
+                status, data = 504, f"<h1>504 Gateway Timeout</h1><p>{e}</p>".encode("utf-8")
+
     writer.write(
         f"HTTP/1.1 {status} OK\r\n"
-        f"Content-Type: text/html; charset=utf-8\r\n"
+        f"Content-Type: {content_type}\r\n"
         f"Content-Length: {len(data)}\r\n"
         f"Connection: close\r\n\r\n".encode() + data
     )
@@ -47,4 +68,5 @@ async def main():
         print("HTTP on :8080, WebSocket tunnel on :8765")
         await http_server.serve_forever()
 
-asyncio.run(main())
+if __name__ == "__main__":
+    asyncio.run(main())
