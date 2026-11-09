@@ -38,22 +38,6 @@ resource "aws_security_group" "vps_websocket_sg" {
     cidr_blocks = ["0.0.0.0/0"]
   }
   
-  ingress {
-    description = "Custom Port"
-    from_port   = 8080
-    to_port     = 8080
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  ingress {
-    description = "WebSocket tunnel (home to VPS)"
-    from_port   = 8765
-    to_port     = 8765
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
   egress {
     from_port   = 0
     to_port     = 0
@@ -90,18 +74,50 @@ resource "aws_instance" "vps" {
                 export DEBIAN_FRONTEND=noninteractive
                 apt-get update -y
                 apt-get upgrade -y
-                apt-get install -y python3 python3-pip
+                apt-get install -y python3 python3-pip nginx
                 pip3 install websockets
                 
+                mkdir -p /etc/nginx/certs
                 mkdir -p /home/ubuntu/websocket-proxy
+
+                # Bootstrap temporary certificate so Nginx starts cleanly before sign-server.sh is run
+                if [ ! -f /etc/nginx/certs/server.crt ]; then
+                    openssl req -x509 -newkey rsa:2048 -nodes -keyout /etc/nginx/certs/server.key -out /etc/nginx/certs/server.crt -days 1 -subj "/CN=temporary"
+                    touch /etc/nginx/certs/ca.crt
+                    chmod 600 /etc/nginx/certs/server.key
+                fi
+
+                cat << 'NGINXEOF' > /etc/nginx/sites-available/default
+                ${file("../nginx/default.conf")}
+                NGINXEOF
+
+                nginx -t && systemctl restart nginx
 
                 cat << 'PYTHONEOF' > /home/ubuntu/websocket-proxy/vps.py
                 ${file("../vps.py")}
                 PYTHONEOF
 
-                chown -R ubuntu:ubuntu /home/ubuntu/websocket-proxy
+                cat << 'SERVICEEOF' > /etc/systemd/system/tunnel-broker.service
+                [Unit]
+                Description=WebSocket Reverse Proxy Broker
+                After=network.target
 
-                nohup python3 /home/ubuntu/websocket-proxy/vps.py > /home/ubuntu/websocket-proxy/app.log 2>&1 &
+                [Service]
+                Type=simple
+                User=ubuntu
+                WorkingDirectory=/home/ubuntu/websocket-proxy
+                ExecStart=/usr/bin/python3 /home/ubuntu/websocket-proxy/vps.py --host 127.0.0.1 --http-port 8080 --ws-port 8765
+                Restart=always
+                RestartSec=3
+
+                [Install]
+                WantedBy=multi-user.target
+                SERVICEEOF
+
+                chown -R ubuntu:ubuntu /home/ubuntu/websocket-proxy
+                systemctl daemon-reload
+                systemctl enable tunnel-broker
+                systemctl start tunnel-broker
                 EOF
 
   tags = {

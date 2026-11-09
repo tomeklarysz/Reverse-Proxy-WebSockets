@@ -1,1 +1,8 @@
 .venv
+certs/*.key
+certs/*.p12
+certs/*.srl
+certs/*.csr
+certs/server.*
+*.key
+*.p12

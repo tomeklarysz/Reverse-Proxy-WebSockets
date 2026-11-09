@@ -194,7 +194,7 @@ def load_token():
 
 def parse_args():
     parser = argparse.ArgumentParser(description="VPS broker (Reverse Proxy over WS)")
-    parser.add_argument("--host", default="0.0.0.0", help="Address to bind both servers to")
+    parser.add_argument("--host", default="127.0.0.1", help="Address to bind both servers to (default: 127.0.0.1)")
     parser.add_argument("--http-port", type=int, default=8080, help="Public HTTP port")
     parser.add_argument("--ws-port", type=int, default=8765, help="WebSocket tunnel port")
     return parser.parse_args()

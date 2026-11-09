@@ -131,14 +131,41 @@ async def handle_request(ws, raw_msg: str, target_base: str):
     await ws.send(message)
 
 
-async def run_agent(vps_url: str, target_base: str, token: Optional[str] = None, insecure: bool = False):
+async def run_agent(
+    vps_url: str,
+    target_base: str,
+    token: Optional[str] = None,
+    ca_cert: Optional[str] = None,
+    agent_cert: Optional[str] = None,
+    agent_key: Optional[str] = None,
+    insecure: bool = False,
+):
     ssl_context = None
     if vps_url.startswith("wss://"):
-        ssl_context = ssl.create_default_context()
+        ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+
+        # 1. Load CA to verify VPS server certificate
+        if ca_cert and os.path.exists(ca_cert):
+            ssl_context.load_verify_locations(cafile=ca_cert)
+            print(f"[mTLS] Loaded trusted CA from {ca_cert}")
+        elif not insecure:
+            ssl_context.load_default_certs()
+
+        # 2. Load agent client certificate & private key for mTLS identity
+        if agent_cert and agent_key and os.path.exists(agent_cert) and os.path.exists(agent_key):
+            ssl_context.load_cert_chain(certfile=agent_cert, keyfile=agent_key)
+            print(f"[mTLS] Loaded agent certificate from {agent_cert}")
+        elif not insecure:
+            print("[mTLS] WARNING: No client certificate/key specified. mTLS handshake may fail if required by Nginx.")
+
+        # 3. Hostname and verification policy
         if insecure:
-            print("[security] WARNING: TLS certificate verification is disabled (--insecure), use only for testing")
+            print("[security] WARNING: TLS verification is disabled (--insecure), use only for testing")
             ssl_context.check_hostname = False
             ssl_context.verify_mode = ssl.CERT_NONE
+        else:
+            ssl_context.check_hostname = True
+            ssl_context.verify_mode = ssl.CERT_REQUIRED
     elif token:
         print("[security] WARNING: unencrypted ws:// - the token is sent in plain text, use wss:// outside local tests")
 
@@ -167,12 +194,37 @@ async def run_agent(vps_url: str, target_base: str, token: Optional[str] = None,
             retry_delay = min(retry_delay * 2, 30)
 
 
+def find_default_cert(filename: str) -> Optional[str]:
+    for candidate in (os.path.join("certs", filename), filename):
+        if os.path.isfile(candidate):
+            return candidate
+    return None
+
+
 def parse_args():
-    parser = argparse.ArgumentParser(description="Local Agent (Reverse Proxy over WS)")
-    parser.add_argument("--vps-url", "--broker-url", dest="vps_url", default="ws://127.0.0.1:8765", help="VPS WebSocket URL")
+    parser = argparse.ArgumentParser(description="Local Agent (Reverse Proxy over WS with mTLS)")
+    parser.add_argument(
+        "--vps-url", "--broker-url", dest="vps_url",
+        default="ws://127.0.0.1:8765",
+        help="VPS WebSocket URL (e.g. wss://<VPS_IP>:443/ws-tunnel for mTLS or ws://127.0.0.1:8765 for local dev)"
+    )
     parser.add_argument("--target-url", default="http://127.0.0.1:3000", help="Local HTTP service URL")
-    parser.add_argument("--token", default=os.environ.get("TUNNEL_TOKEN"),
-                        help="Authentication Bearer token (default: TUNNEL_TOKEN env variable, preferred - CLI args are visible in the process list)")
+    parser.add_argument(
+        "--token", default=os.environ.get("TUNNEL_TOKEN"),
+        help="Authentication Bearer token (default: TUNNEL_TOKEN env variable, preferred - CLI args are visible in the process list)"
+    )
+    parser.add_argument(
+        "--ca-cert", default=find_default_cert("ca.crt"),
+        help="Path to CA certificate for verifying server certificate (default: certs/ca.crt if present)"
+    )
+    parser.add_argument(
+        "--agent-cert", "--client-cert", dest="agent_cert", default=find_default_cert("agent.crt"),
+        help="Path to Agent mTLS certificate (default: certs/agent.crt if present)"
+    )
+    parser.add_argument(
+        "--agent-key", "--client-key", dest="agent_key", default=find_default_cert("agent.key"),
+        help="Path to Agent mTLS private key (default: certs/agent.key if present)"
+    )
     parser.add_argument("--insecure", action="store_true", help="Disable TLS verification")
     return parser.parse_args()
 
@@ -180,6 +232,14 @@ def parse_args():
 if __name__ == "__main__":
     args = parse_args()
     try:
-        asyncio.run(run_agent(args.vps_url, args.target_url, args.token, args.insecure))
+        asyncio.run(run_agent(
+            vps_url=args.vps_url,
+            target_base=args.target_url,
+            token=args.token,
+            ca_cert=args.ca_cert,
+            agent_cert=args.agent_cert,
+            agent_key=args.agent_key,
+            insecure=args.insecure,
+        ))
     except KeyboardInterrupt:
         pass
