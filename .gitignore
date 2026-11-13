@@ -1,8 +1,12 @@
 .venv
-certs/*.key
-certs/*.p12
-certs/*.srl
-certs/*.csr
-certs/server.*
+venv
+certs
 *.key
 *.p12
+*.pem
+terraform/.terraform/
+terraform/.terraform.*
+terraform/*.tfstate
+terraform/*.tfstate.*
+terraform/.terraform.tfstate.lock.info
+terraform/crash.log
