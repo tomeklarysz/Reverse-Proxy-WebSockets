@@ -1,4 +1,6 @@
 terraform {
+  required_version = ">= 1.4" 
+
   required_providers {
     aws = {
       source  = "hashicorp/aws"
@@ -11,6 +13,10 @@ provider "aws" {
   region = "eu-central-1"
 }
 
+variable "ssh_private_key_path" {
+  type    = string
+}
+
 resource "aws_security_group" "vps_websocket_sg" {
   name = "vps-websocket-sg"
 
@@ -19,7 +25,7 @@ resource "aws_security_group" "vps_websocket_sg" {
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"] 
+    cidr_blocks = ["0.0.0.0/0"]
   }
 
   ingress {
@@ -37,7 +43,7 @@ resource "aws_security_group" "vps_websocket_sg" {
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
-  
+
   egress {
     from_port   = 0
     to_port     = 0
@@ -60,14 +66,15 @@ data "aws_ami" "ubuntu" {
     name   = "virtualization-type"
     values = ["hvm"]
   }
-  owners = ["099720109477"] 
+  owners = ["099720109477"]
 }
 
 resource "aws_instance" "vps" {
-  ami                    = data.aws_ami.ubuntu.id
-  instance_type          = "t3.micro"
-  vpc_security_group_ids = [aws_security_group.vps_websocket_sg.id]
-  key_name               = "MyKeyPairPutty" # SSH key pair name
+  ami                         = data.aws_ami.ubuntu.id
+  instance_type               = "t3.micro"
+  vpc_security_group_ids      = [aws_security_group.vps_websocket_sg.id]
+  key_name                    = "MyKeyPairPutty" # SSH key pair name
+  user_data_replace_on_change = true             
 
   user_data = <<-EOF
                 #!/bin/bash
@@ -76,7 +83,7 @@ resource "aws_instance" "vps" {
                 apt-get upgrade -y
                 apt-get install -y python3 python3-pip nginx
                 pip3 install websockets
-                
+
                 mkdir -p /etc/nginx/certs
                 mkdir -p /home/ubuntu/websocket-proxy
 
@@ -122,6 +129,28 @@ resource "aws_instance" "vps" {
 
   tags = {
     Name = "WebSocket-ReverseProxy-VPS"
+  }
+}
+
+resource "terraform_data" "server_cert" {
+  triggers_replace = [aws_instance.vps.id]
+
+  connection {
+    type        = "ssh"
+    host        = aws_instance.vps.public_ip
+    user        = "ubuntu"
+    private_key = file(pathexpand(var.ssh_private_key_path))
+    timeout     = "5m"
+  }
+
+  provisioner "remote-exec" {
+    inline = ["cloud-init status --wait || true"]
+  }
+
+  provisioner "local-exec" {
+    working_dir = "${path.module}/.."
+    interpreter = ["PowerShell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command"]
+    command     = "& .\\sign-server.ps1 '${aws_instance.vps.public_ip}' '${pathexpand(var.ssh_private_key_path)}'; exit $LASTEXITCODE"
   }
 }
 
