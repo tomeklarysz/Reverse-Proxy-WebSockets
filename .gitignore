@@ -10,3 +10,5 @@ terraform/*.tfstate
 terraform/*.tfstate.*
 terraform/.terraform.tfstate.lock.info
 terraform/crash.log
+demo/captures/
+__pycache__/

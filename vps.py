@@ -36,10 +36,18 @@ def is_safe_path(path):
     return len(path) <= MAX_PATH and SAFE_PATH.fullmatch(path) is not None
 
 
+def client_ip(peer, real_ip):
+    """Behind Nginx every peer is 127.0.0.1 - then trust X-Real-IP set by Nginx (only from loopback)."""
+    if peer in ("127.0.0.1", "::1") and real_ip:
+        return real_ip.strip()[:45]
+    return peer
+
+
 def check_token(connection, request):
     auth = request.headers.get("Authorization", "")
     if not hmac.compare_digest(auth.encode(), f"Bearer {TOKEN}".encode()):
-        print(f"[security] Rejected tunnel connection from {connection.remote_address[0]}: invalid token")
+        ip = client_ip(connection.remote_address[0], request.headers.get("X-Real-IP"))
+        print(f"[security] Rejected tunnel connection from {ip}: invalid token")
         return connection.respond(HTTPStatus.UNAUTHORIZED, "Unauthorized\n")
     return None
 
@@ -48,7 +56,7 @@ async def tunnel_handler(ws):
     global tunnel
     old = tunnel
     tunnel = ws
-    print(f"Home tunnel connected from {ws.remote_address[0]}")
+    print(f"Home tunnel connected from {client_ip(ws.remote_address[0], ws.request.headers.get('X-Real-IP'))}")
     if old is not None:
         print("[security] Previous tunnel replaced by a new authenticated connection")
         await old.close(code=1008, reason="replaced by a new connection")
@@ -119,12 +127,17 @@ async def read_request_head(reader):
     parts = line.decode("latin-1").split(" ", 2)
     if len(parts) < 2:
         raise ValueError("malformed request line")
+    real_ip = None
     for _ in range(MAX_HEADER_LINES):
-        if not (await reader.readline()).strip():
+        header = (await reader.readline()).strip()
+        if not header:
             break
+        name, _, value = header.decode("latin-1").partition(":")
+        if name.strip().lower() == "x-real-ip":
+            real_ip = value
     else:
         raise ValueError("too many header lines")
-    return parts[0], parts[1]
+    return parts[0], parts[1], real_ip
 
 
 def send_response(writer, status, data, content_type="text/html; charset=utf-8"):
@@ -163,14 +176,15 @@ async def http_handler(reader, writer):
             return
         if head is None:
             return
-        method, path = head
+        method, path, real_ip = head
+        peer = client_ip(peer, real_ip)
 
         if method not in ALLOWED_METHODS or not is_safe_path(path):
             print(f"[security] Rejected request from {peer}: {method[:16]!r} {path[:80]!r}")
             send_response(writer, 400, b"<h1>400 Bad Request</h1>")
             return
 
-        print(f"HTTP {method} {path}")
+        print(f"HTTP {method} {path} from {peer}")
         status, data, content_type = await forward(method, path)
         send_response(writer, status, data, content_type)
         await writer.drain()

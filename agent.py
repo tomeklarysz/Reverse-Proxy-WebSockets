@@ -189,7 +189,7 @@ async def run_agent(
         except asyncio.CancelledError:
             break
         except Exception as e:
-            print(f"[-] Connection error: {e}. Retrying in {retry_delay}s...")
+            print(f"[-] Connection error: {e or e.__class__.__name__}. Retrying in {retry_delay}s...")
             await asyncio.sleep(retry_delay)
             retry_delay = min(retry_delay * 2, 30)
 

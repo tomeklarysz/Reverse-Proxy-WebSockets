@@ -22,3 +22,13 @@ python security_tests\attack_tunnel_hijack.py
 python security_tests\attack_ssrf.py
 python security_tests\attack_response_mixup.py
 ```
+
+## Demos (TLS / mTLS, behind Nginx)
+
+These run against Nginx with mTLS - the real VPS or the local Docker replica
+described in [demo/README.md](../demo/README.md).
+
+| Script | What it demonstrates |
+|---|---|
+| `demo_auth.py` | Authentication layers: no client cert / foreign CA (Nginx 400), no or wrong token (401), browser Origin (403), valid agent (101), fake server rejected by the agent, and why `--insecure` is dangerous |
+| `demo_eavesdrop.py` | Captures the tunnel with tshark: on `ws://` the token, paths and photos are readable, on `wss://` only TLS 1.3 records. Saves `.pcapng` files for Wireshark |
